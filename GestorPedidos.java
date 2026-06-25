@@ -1,94 +1,36 @@
-import java.util.*;
-import java.io.*;
-import java.sql.*;
+// GestorPedidos.java
+import java.util.List;
 
 public class GestorPedidos {
-    private Connection conexionBD;
+    private final PedidoRepository repository;
+    private final Facturador facturador;
+    private final Notificador notificador;
 
-    public GestorPedidos() {
-        try {
-            this.conexionBD = DriverManager.getConnection(
-                    "jdbc:mysql://localhost:3306/tienda", "root", "admin123");
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
+    // Las dependencias se inyectan, no se crean aquí
+    public GestorPedidos(PedidoRepository repository, Facturador facturador, Notificador notificador) {
+        this.repository = repository;
+        this.facturador = facturador;
+        this.notificador = notificador;
     }
 
-    public void procesarPedido(String nombreCliente, String emailCliente,
-            List<String> nombresProductos,
-            List<Double> preciosProductos,
-            List<Integer> cantidades,
-            String tipoCliente) {
-        if (nombreCliente == null || nombreCliente.trim().isEmpty()) {
-            System.out.println("Error: nombre de cliente invalido");
-            return;
-        }
-        if (emailCliente == null || !emailCliente.contains("@")) {
-            System.out.println("Error: email invalido");
-            return;
-        }
-        double subtotal = 0;
-        for (int i = 0; i < nombresProductos.size(); i++) {
-            subtotal += preciosProductos.get(i) * cantidades.get(i);
-        }
-        double descuento = 0;
-        if (tipoCliente.equals("VIP")) {
-            descuento = subtotal * 0.20;
-        } else if (tipoCliente.equals("FRECUENTE")) {
-            descuento = subtotal * 0.10;
-        } else if (tipoCliente.equals("REGULAR")) {
-            descuento = subtotal * 0.05;
-        } else if (tipoCliente.equals("NUEVO")) {
-            descuento = 0;
-        }
+    public void procesarPedido(Cliente cliente, List<LineaPedido> lineas) {
+        double subtotal = lineas.stream().mapToDouble(LineaPedido::getSubtotal).sum();
+        double descuento = Descuento.obtenerDescuento(cliente.getTipo(), subtotal);
         double impuesto = (subtotal - descuento) * 0.12;
         double total = subtotal - descuento + impuesto;
-        try {
-            Statement stmt = conexionBD.createStatement();
-            String sql = "INSERT INTO pedidos (cliente, total) VALUES ('"+ nombreCliente + "', " + total + ")";
-            stmt.executeUpdate(sql);
-        } catch (SQLException e) {
-            System.out.println("Error al guardar el pedido: " + e.getMessage());
-        }
-        try {
-            FileWriter writer = new FileWriter("factura_" + nombreCliente + ".txt");
-            writer.write("FACTURA\n");
-            writer.write("Cliente: " + nombreCliente + "\n");
-            for (int i = 0; i < nombresProductos.size(); i++) {
-                writer.write(nombresProductos.get(i) + " x" + cantidades.get(i) + " = $" + (preciosProductos.get(i) * cantidades.get(i)) + "\n");
-            }
-            writer.write("Subtotal: $" + subtotal + "\n");
-            writer.write("Descuento: $" + descuento + "\n");
-            writer.write("Impuesto: $" + impuesto + "\n");
-            writer.write("TOTAL: $" + total + "\n");
-            writer.close();
-        } catch (IOException e) {
-            System.out.println("Error al generar la factura: " + e.getMessage());
-        }
-        System.out.println("Enviando correo a " + emailCliente + "...");
-        System.out.println("Asunto: Confirmacion de pedido");
-        System.out.println("Cuerpo: Estimado " + nombreCliente + ", su pedido por $" + total + " ha sido procesado.");
-        System.out.println("[LOG] Pedido procesado para " + nombreCliente + " - Total: " + total);
+
+        repository.guardar(cliente.getNombre(), total);
+        facturador.generarFactura(cliente.getNombre(), lineas, subtotal, descuento, impuesto, total);
+        
+        notificador.enviarCorreo(cliente.getEmail(), 
+            "Confirmación de pedido", 
+            "Estimado " + cliente.getNombre() + ", su pedido por $" + total + " ha sido procesado.");
     }
 
-    public void cancelarPedido(String nombreCliente, String emailCliente, int idPedido) {
-        if (nombreCliente == null || nombreCliente.trim().isEmpty()) {
-            System.out.println("Error: nombre de cliente invalido");
-            return;
-        }
-        if (emailCliente == null || !emailCliente.contains("@")) {
-            System.out.println("Error: email invalido");
-            return;
-        }
-        try {
-            Statement stmt = conexionBD.createStatement();
-            String sql = "DELETE FROM pedidos WHERE id = " + idPedido;
-            stmt.executeUpdate(sql);
-        } catch (SQLException e) {
-            System.out.println("Error al cancelar el pedido: " + e.getMessage());
-        }
-        System.out.println("Enviando correo a " + emailCliente + "...");
-        System.out.println("Asunto: Cancelacion de pedido");
-        System.out.println("Cuerpo: Estimado " + nombreCliente + ", su pedido #" + idPedido + " ha sido cancelado.");
+    public void cancelarPedido(Cliente cliente, int idPedido) {
+        repository.eliminar(idPedido);
+        notificador.enviarCorreo(cliente.getEmail(), 
+            "Cancelación de pedido", 
+            "Estimado " + cliente.getNombre() + ", su pedido #" + idPedido + " ha sido cancelado.");
     }
 }
